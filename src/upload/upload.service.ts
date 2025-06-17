@@ -27,35 +27,4 @@ export class UploadService {
       throw new Error(`Upload failed: ${error.message}`);
     }
   }
-
-  private validateFile(file: Express.Multer.File) {
-    if (!file.buffer) {
-      throw new Error('File buffer is empty');
-    }
-  }
-
-  private validateVideoFile(file: Express.Multer.File) {
-    this.validateFile(file);
-
-    if (!file.mimetype.startsWith('video/')) {
-      throw new Error('Only video files are allowed');
-    }
-  }
-
-  async uploadVideo(
-    videoFile: Express.Multer.File,
-    progressCallback?: (progress: number) => void,
-  ) {
-    if (!videoFile) {
-      throw new Error('No video file provided');
-    }
-
-    this.validateVideoFile(videoFile);
-
-    try {
-      return await this.s3Service.uploadLargeFile(videoFile, progressCallback);
-    } catch (error) {
-      throw new Error(`Video upload failed: ${error.message}`);
-    }
-  }
 }

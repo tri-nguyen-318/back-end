@@ -1,33 +1,44 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { S3 } from 'aws-sdk';
-import { v4 as uuid } from 'uuid';
+import {
+  S3Client,
+  HeadBucketCommand,
+  CreateBucketCommand,
+  PutObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+} from '@aws-sdk/client-s3';
+import { v4 } from 'uuid';
 
 @Injectable()
 export class S3Service {
   private readonly logger = new Logger(S3Service.name);
-  private readonly s3: S3;
+  private readonly s3: S3Client;
   private readonly bucketName: string;
-  private currentKey: string = '';
 
   constructor() {
-    this.s3 = new S3({
+    this.s3 = new S3Client({
       endpoint: process.env.MINIO_ENDPOINT || 'http://localhost:9000',
-      accessKeyId: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-      secretAccessKey: process.env.MINIO_SECRET_KEY || 'minioadmin123',
-      s3ForcePathStyle: true,
-      signatureVersion: 'v4',
+      credentials: {
+        accessKeyId: process.env.MINIO_ACCESS_KEY || 'minioadmin',
+        secretAccessKey: process.env.MINIO_SECRET_KEY || 'minioadmin123',
+      },
+      forcePathStyle: true, // Note: changed from s3ForcePathStyle to forcePathStyle
+      region: process.env.AWS_REGION || 'us-east-1', // Required for S3Client
     });
     this.bucketName = process.env.MINIO_BUCKET_NAME || 'default-bucket';
-    this.initializeBucket();
   }
 
   private async initializeBucket() {
     try {
-      await this.s3.headBucket({ Bucket: this.bucketName }).promise();
+      await this.s3.send(new HeadBucketCommand({ Bucket: this.bucketName }));
       this.logger.log(`Bucket ${this.bucketName} already exists`);
     } catch (error) {
-      if (error.code === 'NotFound') {
-        await this.s3.createBucket({ Bucket: this.bucketName }).promise();
+      if (error.name === 'NotFound') {
+        await this.s3.send(
+          new CreateBucketCommand({ Bucket: this.bucketName }),
+        );
         this.logger.log(`Created bucket ${this.bucketName}`);
       } else {
         this.logger.error('Bucket initialization error', error.stack);
@@ -40,17 +51,22 @@ export class S3Service {
     try {
       await this.initializeBucket(); // Ensure bucket exists
 
-      const uploadResult = await this.s3
-        .upload({
+      const key = `${v4()}-${filename.replace(/\s+/g, '-')}`;
+      await this.s3.send(
+        new PutObjectCommand({
           Bucket: this.bucketName,
           Body: dataBuffer,
-          Key: `${uuid()}-${filename.replace(/\s+/g, '-')}`,
-        })
-        .promise();
+          Key: key,
+        }),
+      );
+
+      // Note: For MinIO, you might need to construct the URL manually
+      const endpoint = process.env.MINIO_ENDPOINT || 'http://localhost:9000';
+      const url = `${endpoint}/${this.bucketName}/${key}`;
 
       return {
-        key: uploadResult.Key,
-        url: uploadResult.Location,
+        key,
+        url,
       };
     } catch (error) {
       this.logger.error('Upload error', error.stack);
@@ -58,107 +74,63 @@ export class S3Service {
     }
   }
 
-  async uploadLargeFile(
-    file: Express.Multer.File,
-    progressCallback?: (progress: number) => void,
-  ) {
-    const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB chunks
-    const uploadId = await this.initiateMultipartUpload(file.originalname);
-
-    try {
-      const parts = await this.uploadParts(file.buffer, uploadId, CHUNK_SIZE);
-      const result = await this.completeUpload(uploadId, parts);
-
-      if (progressCallback) {
-        const totalParts = parts.length;
-        for (let i = 0; i < totalParts; i++) {
-          const progress = ((i + 1) / totalParts) * 100;
-          progressCallback(progress);
-        }
-      }
-
-      return {
-        location: result.Location,
-        key: result.Key,
-        etag: result.ETag,
-      };
-    } catch (error) {
-      await this.abortUpload(uploadId);
-      throw new Error(`Upload failed: ${error.message}`);
-    }
-  }
-
-  private async initiateMultipartUpload(filename: string): Promise<string> {
-    this.currentKey = `${uuid()}-${filename.replace(/\s+/g, '-')}`;
-    const response = await this.s3
-      .createMultipartUpload({
+  async startMultipartUpload(filename: string) {
+    await this.initializeBucket();
+    const key = `${v4()}-${filename.replace(/\s+/g, '-')}`;
+    const response = await this.s3.send(
+      new CreateMultipartUploadCommand({
         Bucket: this.bucketName,
-        Key: this.currentKey,
-      })
-      .promise();
-    return response.UploadId as string;
+        Key: key,
+      }),
+    );
+    return { uploadId: response.UploadId, key };
   }
 
-  private async uploadParts(
-    buffer: Buffer,
+  async uploadPart(
+    key: string,
     uploadId: string,
-    chunkSize: number,
-  ): Promise<Array<{ PartNumber: number; ETag: string }>> {
-    const partPromises: Array<Promise<{ PartNumber: number; ETag: string }>> =
-      [];
-    let partNumber = 1;
-
-    for (let offset = 0; offset < buffer.length; offset += chunkSize) {
-      const chunk = buffer.slice(offset, offset + chunkSize);
-      const currentPartNumber = partNumber++;
-
-      const uploadPromise = this.s3
-        .uploadPart({
-          Bucket: this.bucketName,
-          Key: this.currentKey,
-          PartNumber: currentPartNumber,
-          UploadId: uploadId,
-          Body: chunk,
-        })
-        .promise()
-        .then((result) => ({
-          PartNumber: currentPartNumber,
-          ETag: result.ETag as string,
-        }));
-
-      partPromises.push(uploadPromise);
-    }
-
-    return Promise.all(partPromises);
-  }
-
-  private async completeUpload(
-    uploadId: string,
-    parts: Array<{ PartNumber: number; ETag: string }>,
+    partNumber: number,
+    chunk: Buffer,
   ) {
-    return this.s3
-      .completeMultipartUpload({
+    const response = await this.s3.send(
+      new UploadPartCommand({
         Bucket: this.bucketName,
-        Key: this.currentKey,
+        Key: key,
         UploadId: uploadId,
-        MultipartUpload: {
-          Parts: parts.map((part) => ({
-            ETag: part.ETag,
-            PartNumber: part.PartNumber,
-          })),
-        },
-      })
-      .promise();
+        PartNumber: partNumber,
+        Body: chunk,
+      }),
+    );
+    return { ETag: response.ETag, PartNumber: partNumber };
   }
 
-  private async abortUpload(uploadId: string) {
-    if (!this.currentKey) return;
-    await this.s3
-      .abortMultipartUpload({
+  async completeMultipartUpload(
+    key: string,
+    uploadId: string,
+    parts: Array<{ ETag: string; PartNumber: number }>,
+  ) {
+    await this.s3.send(
+      new CompleteMultipartUploadCommand({
         Bucket: this.bucketName,
-        Key: this.currentKey,
+        Key: key,
         UploadId: uploadId,
-      })
-      .promise();
+        MultipartUpload: { Parts: parts },
+      }),
+    );
+
+    const endpoint = process.env.MINIO_ENDPOINT || 'http://localhost:9000';
+    const url = `${endpoint}/${this.bucketName}/${key}`;
+
+    return { key, url };
+  }
+
+  async abortMultipartUpload(key: string, uploadId: string) {
+    await this.s3.send(
+      new AbortMultipartUploadCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        UploadId: uploadId,
+      }),
+    );
   }
 }

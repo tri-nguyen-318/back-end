@@ -14,6 +14,19 @@ services:
     volumes:
       - minio_data:/data # Persists data between restarts
     restart: unless-stopped
-
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    hostname: rabbitmq
+    ports:
+      - '5672:5672' # AMQP port
+      - '15672:15672' # Management UI port
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=password
+    restart: unless-stopped
 volumes:
   minio_data: # Named volume for MinIO storage
+  rabbitmq_data:
