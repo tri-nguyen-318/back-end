@@ -1,9 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { S3Service } from '../s3/s3.service';
+import { PublisherService } from 'src/rabbitmq/publisher.service';
 
 @Injectable()
 export class UploadService {
-  constructor(private readonly s3Service: S3Service) {}
+  constructor(
+    private readonly s3Service: S3Service,
+    private readonly publisherService: PublisherService,
+  ) {}
 
   async uploadToS3(files: Express.Multer.File[]) {
     // 👈 Remove decorator
@@ -22,6 +26,29 @@ export class UploadService {
       return {
         message: 'Files uploaded successfully',
         files: results,
+      };
+    } catch (error) {
+      throw new Error(`Upload failed: ${error.message}`);
+    }
+  }
+
+  async uploadVideosToS3(files: Express.Multer.File[]) {
+    // 👈 Remove decorator
+    if (!files || files.length === 0) {
+      throw new Error('No files provided for upload');
+    }
+
+    // It's might be heavy operation, so we can use a message queue to handle it asynchronously
+    try {
+      // Publish the upload results to RabbitMQ
+      await this.publisherService.publishToQueue(
+        { event: 'video_to_uploaded', test: 'test' },
+        'video_to_uploaded',
+      );
+
+      return {
+        message: 'Files uploaded successfully',
+        files: [],
       };
     } catch (error) {
       throw new Error(`Upload failed: ${error.message}`);

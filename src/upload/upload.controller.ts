@@ -37,6 +37,8 @@ export class UploadController {
       totalSegments: body.totalSegments,
     });
 
-    return this.uploadService.uploadToS3([file]); // Assuming uploadToS3 accepts single file
+    return this.uploadService.uploadVideosToS3([file]); // Assuming uploadToS3 accepts single file
+
+    // return this.uploadService.uploadToS3([file]); // Assuming uploadToS3 accepts single file
   }
 }
