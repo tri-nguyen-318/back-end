@@ -1,4 +1,10 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { Asset, Prisma } from 'generated/prisma';
 import { AssetService } from './asset.service';
 
@@ -32,5 +38,23 @@ export class AssetController {
     }
 
     return this.assetService.getAssets(params);
+  }
+
+  @Post('/analyze')
+  async analyzeAssets() {
+    // This method can be used to trigger analysis of assets
+    // For now, it just returns all assets
+    const result = await this.assetService.analyzeAssets();
+    console.log('🚀 ~ AssetController ~ analyzeAssets ~ result:', result);
+
+    if (!result) {
+      throw new NotFoundException('No assets found for analysis');
+    }
+
+    return {
+      message: 'Assets analyzed successfully',
+      assets: result,
+      foundAt: 123456789, // Example timestamp
+    };
   }
 }
