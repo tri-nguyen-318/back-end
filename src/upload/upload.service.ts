@@ -46,6 +46,9 @@ export class UploadService {
         'video_to_uploaded',
       );
 
+      // Move this to comsumer
+      this.uploadToS3(files);
+
       return {
         message: 'Files uploaded successfully',
         files: [],
