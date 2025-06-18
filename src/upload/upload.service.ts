@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { S3Service } from '../s3/s3.service';
 import { PublisherService } from 'src/rabbitmq/publisher.service';
+import { AssetService } from 'src/asset/asset.service';
 
 @Injectable()
 export class UploadService {
   constructor(
     private readonly s3Service: S3Service,
     private readonly publisherService: PublisherService,
+    private readonly assetsService: AssetService,
   ) {}
 
   async uploadToS3(files: Express.Multer.File[]) {
@@ -22,6 +24,16 @@ export class UploadService {
       });
 
       const results = await Promise.all(uploadPromises);
+
+      // Save the file metadata to the database
+      const assetsToCreate = results.map((result, index) => ({
+        name: files[index].originalname,
+        description: '',
+        url: result.url,
+        type: 'image',
+      }));
+
+      await this.assetsService.createAssets(assetsToCreate);
 
       return {
         message: 'Files uploaded successfully',

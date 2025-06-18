@@ -27,6 +27,21 @@ services:
       - RABBITMQ_DEFAULT_USER=admin
       - RABBITMQ_DEFAULT_PASS=password
     restart: unless-stopped
+
+  db:
+    container_name: db
+    image: postgres:latest
+    restart: always
+    environment:
+      POSTGRES_USER: username # The PostgreSQL user (useful to connect to the database)
+      POSTGRES_PASSWORD: password # The PostgreSQL password (useful to connect to the database)
+      POSTGRES_DB: dbname # The PostgreSQL default database (automatically created at first launch)
+    ports:
+      - 8006:5432
+    volumes:
+      - ./sql:/docker-entrypoint-initdb.d
+
 volumes:
   minio_data: # Named volume for MinIO storage
   rabbitmq_data:
+  postgres_data:
